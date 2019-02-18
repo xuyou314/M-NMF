@@ -26,10 +26,9 @@ class MNMF:
             self.args = args
 
             self.G = graph_reader(args.input)
-
             self.number_of_nodes = len(nx.nodes(self.G))
             if self.number_of_nodes>10000:
-                os.environ["CUDA_VISIBLE_DEVICES"]="-1"  
+                os.environ["CUDA_VISIBLE_DEVICES"] = "7"
             self.S_0 = tf.placeholder(tf.float64, shape=(None, None))
             self.B1 = tf.placeholder(tf.float64, shape=(None, None))
             self.B2 = tf.placeholder(tf.float64, shape=(None, None))
@@ -60,7 +59,7 @@ class MNMF:
         self.denom_1 = tf.matmul(self.M, tf.matmul(self.U,self.U, transpose_a=True))
         self.denom_2 =  tf.maximum(np.float64(self.args.lower_control), self.denom_1)  
         self.M = self.M.assign(tf.nn.l2_normalize(tf.multiply(self.M, self.enum_1/self.denom_2), 1))
-
+        tf.summary.histogram('Ms',self.U)
         #---------------------------------
         # 2. Phase
         #---------------------------------
@@ -70,7 +69,7 @@ class MNMF:
         self.denom_4 =  tf.maximum(np.float64(self.args.lower_control), self.denom_3) 
 
         self.U = self.U.assign(tf.nn.l2_normalize(np.multiply(self.U,self.enum_2/self.denom_4),1))
-
+        tf.summary.histogram('Us', self.U)
         #---------------------------------    
         # 3. Phase
         #---------------------------------
@@ -79,7 +78,7 @@ class MNMF:
         self.denom_5 = tf.matmul(self.C,tf.matmul(self.U,self.U, transpose_a=True))
         self.denom_6 =  tf.maximum(np.float64(self.args.lower_control), self.denom_5) 
         self.C = self.C.assign(tf.nn.l2_normalize(tf.multiply(self.C,self.enum_3/self.denom_6),1))
-
+        tf.summary.histogram('Cs', self.C)
         #---------------------------------    
         # 4. Phase
         #---------------------------------
@@ -99,7 +98,12 @@ class MNMF:
 
         self.sqroot_2 = tf.sqrt(self.enum_4/self.denom_8)
         self.H = self.H.assign(tf.nn.l2_normalize(tf.multiply(self.H,self.sqroot_2),1))
-
+        tf.summary.histogram('Hs', self.H)
+        self.loss1=tf.norm(self.S-tf.matmul(self.M,self.U,transpose_b=True))
+        self.loss2=self.args.alpha*tf.norm(self.H-tf.matmul(self.U,self.C,transpose_b=True))
+        self.loss3=-self.args.beta*tf.linalg.trace(tf.matmul(self.H,tf.matmul(self.B1-self.B2,self.H),transpose_a=True))
+        self.loss4=self.args.lambd*tf.norm(tf.matmul(self.H,self.H,transpose_a=True)-tf.eye(self.args.clusters,dtype=tf.float64))
+        self.total_loss=self.loss1+self.loss2+self.loss3+self.loss4
     def update_state(self, H):
         """
         Procedure to calculate the cluster memberships and modularity.
@@ -107,7 +111,7 @@ class MNMF:
         :return current_modularity: Modularity based on the cluster memberships.
         """
         indices = np.argmax(H, axis=1)
-        indices = {int(i): int(indices[i]) for i in range(len(indices))}
+        indices = {self.G.nodes()[i]: int(indices[i]) for i in range(len(indices))}
         current_modularity = community.modularity(indices,self.G)
         if current_modularity > self.best_modularity:
             self.best_modularity = current_modularity
@@ -130,7 +134,12 @@ class MNMF:
             self.optimal_node_representations = pd.DataFrame(session.run(self.U, feed_dict=feed_dict), columns = map(lambda x: "X_"+ str(x), range(self.args.dimensions)))
             self.optimal_clusters.to_csv(self.args.cluster_mean_output, index = None)
             self.optimal_node_representations.to_csv(self.args.embedding_output, index = None)
-
+        embed=session.run(self.U, feed_dict=feed_dict)
+        fout=open("embed_res","w")
+        fout.write("{} {}\n".format(self.number_of_nodes,self.args.dimensions))
+        for nodei in range(self.number_of_nodes):
+            fout.write("{} {}\n".format(self.G.nodes()[nodei]," ".join([str(x) for x in embed[nodei]])))
+        fout.close()
     def optimize(self):
         """
         Method to run the optimization and halt it when overfitting started.
@@ -143,10 +152,18 @@ class MNMF:
             self.logs = log_setup(self.args)
             print("Optimization started.\n")
             self.build_graph()
+            #merged = tf.summary.merge_all()
+            #writer = tf.summary.FileWriter('./',session.graph)
             feed_dict = {self.S_0: overlap_generator(self.G), self.B1: np.array(nx.adjacency_matrix(self.G).todense()), self.B2:modularity_generator(self.G)}
+
             for i in tqdm(range(self.args.iteration_number)):
                 start = time.time()
-                H = session.run(self.H, feed_dict=feed_dict)
+                H,loss = session.run([self.H,self.total_loss], feed_dict=feed_dict)
+                hht=np.dot(H, H.T)
+                #trace_H=np.diag(hht).sum()
+                #print("trace of matrix H",trace_H,"in iter: ",i)
+                #writer.add_summary(summary,i)
+                print("loss {}".format(loss))
                 current_modularity = self.update_state(H)
                 end = time.time()
                 log_updater(self.logs, i,  end-start, current_modularity)
