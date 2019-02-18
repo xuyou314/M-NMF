@@ -4,7 +4,7 @@ from tqdm import tqdm
 import pandas as pd
 from texttable import Texttable
 import json
-
+import scipy.sparse as sp
 def modularity_generator(G):
     """
     Function to generate a modularity matrix.
@@ -12,9 +12,12 @@ def modularity_generator(G):
     :return laps: Modularity matrix.
     """
     print("Modularity calculation.\n")
-    degrees = nx.degree(G)
+    #degrees = nx.degree(G)
     e_count = len(nx.edges(G))
-    modu = np.array([[float(degrees[node_1]*degrees[node_2])/(2*e_count) for node_1 in nx.nodes(G)] for node_2 in tqdm(nx.nodes(G))],dtype = np.float64)
+    d = np.array(list(dict(nx.degree(G)).values()), ndmin=2)
+    modu=d.T.dot(d)/2/e_count
+    #modu = np.array([[float(degrees[node_1]*degrees[node_2])/(2*e_count) for node_1 in nx.nodes(G)] for node_2 in tqdm(nx.nodes(G))],dtype = np.float64)
+    #print(np.allclose(modu1,modu))
     return modu
 
 def overlap_generator(G):
@@ -25,9 +28,17 @@ def overlap_generator(G):
     """
     print("Second order proximity calculation.\n")
     degrees = nx.degree(G)
-    sets = {node:set(G.neighbors(node)) for node in nx.nodes(G)}
-    laps = np.array([[float(len(sets[node_1].intersection(sets[node_2])))/(float(degrees[node_1]*degrees[node_2])**0.5) if node_1 != node_2 else 0.0 for node_1 in nx.nodes(G)] for node_2 in tqdm(nx.nodes(G))],dtype = np.float64)
-    return laps
+    # sets = {node:set(G.neighbors(node)) for node in nx.nodes(G)}
+    # laps = np.array([[float(len(sets[node_1].intersection(sets[node_2])))/(float(degrees[node_1]*degrees[node_2])**0.5) if node_1 != node_2 else 0.0 for node_1 in nx.nodes(G)] for node_2 in tqdm(nx.nodes(G))],dtype = np.float64)
+    spa=nx.adjacency_matrix(G)
+    spa=spa.dot(spa)
+    diag=np.sqrt(1/np.array(list(dict(degrees).values())))
+    dmat=sp.diags(diag)
+    da=dmat.dot(spa)
+    dad=da.dot(dmat)
+    dad[range(len(G)),range(len(G))]=0
+    #print(np.allclose(laps,dad.toarray()))
+    return dad.toarray()
 
 
 def graph_reader(input_path):
@@ -35,7 +46,10 @@ def graph_reader(input_path):
     Function to read a csv edge list and transform it to a networkx graph object.
     :param input_path: Path to the edge list csv.
     :return graph: NetworkX grapg object.
-    """    
+    """
+    if "bc"in input_path:
+        graph=nx.read_edgelist(input_path)
+        return graph
     edges = pd.read_csv(input_path)
     graph = nx.from_edgelist(edges.values.tolist())
     return graph
